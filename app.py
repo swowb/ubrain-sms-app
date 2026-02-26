@@ -18,10 +18,18 @@ except:
 
 # 솔라피 인증 헤더 생성 함수
 def get_header():
-    now = datetime.datetime.now().isoformat() + "+09:00"
+    # 현재 시간을 ISO 8601 형식의 UTC 시간으로 생성 (Z 붙임)
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
     salt = str(uuid.uuid1())
     combined = now + salt
-    signature = hmac.new(SOLAPI_SECRET.encode(), combined.encode(), hashlib.sha256).hexdigest()
+    
+    # HMAC 서명 생성
+    signature = hmac.new(
+        SOLAPI_SECRET.encode(), 
+        combined.encode(), 
+        hashlib.sha256
+    ).hexdigest()
+    
     return {
         "Authorization": f"HMAC-SHA256 apiKey={SOLAPI_KEY}, date={now}, salt={salt}, signature={signature}",
         "Content-Type": "application/json; charset=utf-8"
