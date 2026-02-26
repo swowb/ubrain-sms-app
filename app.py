@@ -1,13 +1,13 @@
 import streamlit as st
 import google.generativeai as genai
 import requests
-import time
 import datetime
 import uuid
 import hmac
 import hashlib
+import pandas as pd
 
-# 1. 보안 설정
+# 1. 보안 및 API 설정
 try:
     GENAI_KEY = st.secrets["GEMINI_API_KEY"]
     SOLAPI_KEY = st.secrets["SOLAPI_API_KEY"]
@@ -16,7 +16,7 @@ try:
 except:
     st.warning("⚠️ 오른쪽 하단 Settings > Secrets 설정을 완료해주세요!")
 
-# 솔라피 인증 헤더 생성 함수 (가장 에러 없는 방식)
+# 솔라피 인증 헤더 생성 함수
 def get_header():
     now = datetime.datetime.now().isoformat() + "+09:00"
     salt = str(uuid.uuid1())
@@ -38,17 +38,17 @@ TEMPLATES = {
     "공통 결과안내": "[유브레인 면접 결과 안내]\n\n안녕하세요, %이름%님. 유브레인커뮤니케이션즈입니다.\n면접 결과는 제출하신 이력서에 써주신 메일로 발송해 드렸습니다.\n메일 확인 부탁드립니다. 감사합니다."
 }
 
-col1, col2 = st.columns([1.5, 1])
+col1, col2 = st.columns([1, 2]) # 비율 조절: 명단 입력창을 더 넓게
 
 with col1:
     st.subheader("1. 메시지 설정")
     sender_num = st.text_input("발송 번호 (솔라피 등록 번호)", placeholder="010XXXXXXXX")
     selected_tpl = st.selectbox("템플릿 선택", list(TEMPLATES.keys()))
     
-    if 'msg_content' not in st.session_state:
+    if 'msg_content' not in st.session_state or st.sidebar.button("템플릿 초기화"):
         st.session_state.msg_content = TEMPLATES[selected_tpl]
 
-    msg_area = st.text_area("내용 수정", st.session_state.msg_content, height=250)
+    msg_area = st.text_area("내용 수정", st.session_state.msg_content, height=300)
 
     if st.button("✨ AI 문구 다듬기"):
         model = genai.GenerativeModel('gemini-1.5-flash')
@@ -57,26 +57,47 @@ with col1:
         st.rerun()
 
 with col2:
-    st.subheader("2. 명단 입력")
-    user_input = st.text_area("명단 입력 (%이름% / 연락처 / %날짜% / %시간% / %장소% / %직무%)", height=350)
+    st.subheader("2. 발송 명단 입력 (엑셀처럼 사용하세요)")
+    st.caption("엑셀에서 데이터를 복사(Ctrl+C)한 뒤 첫 번째 칸을 클릭하고 붙여넣기(Ctrl+V) 할 수 있습니다.")
+    
+    # 엑셀 형태의 입력창 생성
+    df_template = pd.DataFrame(
+        [{"이름": "", "연락처": "", "날짜": "", "시간": "", "장소": "", "직무": ""}],
+    )
+    
+    edited_df = st.data_editor(
+        df_template, 
+        num_rows="dynamic", # 행을 마음대로 추가/삭제 가능
+        use_container_width=True,
+        column_config={
+            "연락처": st.column_config.TextColumn("연락처 (숫자만)"),
+            "이름": st.column_config.TextColumn("이름"),
+        }
+    )
 
 st.divider()
 
-if user_input and sender_num:
-    lines = user_input.strip().split('\n')
-    for line in lines:
-        if '/' in line:
-            p = [i.strip() for i in line.split('/')]
-            if len(p) >= 2:
-                final_text = msg_area.replace("%이름%", p[0])
-                keys = ["%이름%", "%연락처%", "%날짜%", "%시간%", "%장소%", "%직무%"]
-                for i, key in enumerate(keys):
-                    if i < len(p): final_text = final_text.replace(key, p[i])
-                
-                with st.expander(f"수신: {p[0]} ({p[1]})"):
-                    st.text(final_text)
-                    if st.button(f"발송", key=p[1]):
-                        url = "https://api.solapi.com/messages/v4/send"
-                        data = {"message": {"to": p[1], "from": sender_num, "text": final_text}}
-                        res = requests.post(url, headers=get_header(), json=data)
-                        st.write(res.json())
+# 3. 미리보기 및 발송
+if not edited_df.empty and sender_num:
+    st.subheader("3. 발송 전 최종 확인")
+    
+    # 데이터가 비어있지 않은 행만 처리
+    valid_df = edited_df[edited_df['이름'] != ""]
+    
+    for index, row in valid_df.iterrows():
+        final_text = msg_area.replace("%이름%", str(row['이름']))
+        final_text = final_text.replace("%날짜%", str(row['날짜']))
+        final_text = final_text.replace("%시간%", str(row['시간']))
+        final_text = final_text.replace("%장소%", str(row['장소']))
+        final_text = final_text.replace("%직무%", str(row['직무']))
+        
+        with st.expander(f"수신: {row['이름']} ({row['연락처']})"):
+            st.text(final_text)
+            if st.button(f"발송하기", key=f"btn_{index}"):
+                if not row['연락처']:
+                    st.error("연락처가 비어있습니다.")
+                else:
+                    url = "https://api.solapi.com/messages/v4/send"
+                    data = {"message": {"to": str(row['연락처']), "from": sender_num, "text": final_text}}
+                    res = requests.post(url, headers=get_header(), json=data)
+                    st.json(res.json())
